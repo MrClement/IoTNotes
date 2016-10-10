@@ -3,6 +3,9 @@ var parser = require('body-parser');
 var mongoose = require('mongoose');
 var jwt = require('jsonwebtoken');
 
+var passport = require('passport');
+var local = require('passport-local');
+
 var Burrito = require('./burrito.js');
 var User = require('./user.js');
 
@@ -21,6 +24,11 @@ app.use(parser.urlencoded({
   extended: true
 }));
 app.use(parser.json());
+
+app.use(passport.initialize());
+passport.use(User.createStrategy());
+passport.serializeUser(User.serializeUser());
+passport.deserializeUser(User.deserializeUser());
 
 
 var router = express.Router();
@@ -50,7 +58,82 @@ router.get('/burritos/:order_number', function(req, res) {
   }
 });
 
+router.post('/register', function(req, res) {
+  User.register(new User({
+    username: req.body.username
+  }), req.body.password, function(err, user) {
+    if (err) {
+      console.log(err);
+      res.status(400)
+        .json({
+          error: "Invalid user"
+        });
+    } else {
+      res.json({
+        message: "Account created! Congrats, " + user.username
+      });
+    }
+  });
+});
+
+router.post('/token', function(req, res) {
+  User.findOne({
+      username: req.body.username
+    })
+    .exec(function(err, user) {
+      if (err) throw err;
+      if (user == null) {
+        return res.status(400)
+          .json({
+            error: "Invalid username"
+          });
+      }
+      jwt.sign({
+        username: user.username,
+        admin: user.admin
+      }, secret, {
+        expiresIn: "1 year"
+      }, function(err, token) {
+        if (err) throw err;
+        passport.authenticate('local')(req, res, function() {
+          return res.json({
+            token: token
+          });
+        });
+      });
+    });
+});
+
+router.use(function(req, res, next) {
+  var token = req.query.token || req.body.token || req.headers.authorization;
+  if (token) {
+    jwt.verify(token, secret, {}, function(err, payload) {
+      if (err) {
+        res.status(401)
+          .json({
+            error: "Invalid token"
+          });
+      } else {
+        req.payload = payload;
+        next();
+      }
+    });
+  } else {
+    res.status(401)
+      .json({
+        error: "No token provided"
+      });
+  }
+});
+
+
 router.post('/burritos', function(req, res) {
+  if (!req.payload.admin) {
+    return res.status(403)
+      .json({
+        error: "You don't have permission to do that."
+      })
+  }
   var order_number;
   Burrito.findOne({})
     .sort({
@@ -109,14 +192,8 @@ router.put('/burritos/:order_number', function(req, res) {
   }
 });
 
+
 router.delete('/burritos/:order_number', function(req, res) {
-  var user = jwt.verify(req.body.token, secret);
-  if (!user.admin) {
-    return res.status(401)
-      .json({
-        error: "Unauthorized"
-      });
-  }
   if (!isNaN(req.params.order_number)) {
     Burrito.remove({
         order_number: Number(req.params.order_number)
@@ -141,47 +218,6 @@ router.delete('/burritos/:order_number', function(req, res) {
   }
 });
 
-router.post('/register', function(req, res) {
-  User.create({
-    username: req.body.username,
-    password: req.body.password,
-  }, function(err, user) {
-    if (err) throw err;
-    res.json(user);
-  });
-});
-
-router.post('/token', function(req, res) {
-  User.findOne({
-      username: req.body.username
-    })
-    .exec(function(err, user) {
-      if (err) throw err;
-      if (user == null) {
-        return res.status(400)
-          .json({
-            error: "Invalid username"
-          });
-      }
-      if (user.password != req.body.password) {
-        return res.status(401)
-          .json({
-            error: "Invalid pasword"
-          });
-      }
-      jwt.sign({
-        username: user.username,
-        admin: user.admin
-      }, secret, {
-        expiresIn: "1 year"
-      }, function(err, token) {
-        if (err) throw err;
-        res.json({
-          token: token
-        });
-      });
-    })
-});
 
 app.use('/restaurant', router);
 
